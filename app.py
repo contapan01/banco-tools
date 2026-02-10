@@ -51,7 +51,15 @@ meses_es = {
 
 def process_bank_bgp(file, input_period):
     """Lógica para el primer banco (BGP)"""
-    df = pd.read_excel(file, sheet_name="BGPCheckingMovementsExcel", skiprows=6, usecols="A:G")
+    # Si es .txt, intentamos leer como CSV o delimitado por tabs
+    if file.name.lower().endswith('.txt'):
+        # Usamos engine='python' y sep=None para que detecte el separador (coma, punto y coma o tab)
+        df = pd.read_csv(file, skiprows=6, usecols=[0, 1, 2, 3, 4, 5, 6], sep=None, engine='python', header=None)
+        # Asignar nombres temporales para que la lógica de abajo funcione
+        df.columns = ['Fecha', 'Referencia', 'Descripción', 'Débito', 'Crédito', 'Transacción', 'Saldo total']
+    else:
+        df = pd.read_excel(file, sheet_name="BGPCheckingMovementsExcel", skiprows=6, usecols="A:G")
+    
     sequence = (df.index + 1).astype(str).str.zfill(3)
     df['Referencia_alt'] = 'BG' + input_period + '-' + sequence
     
@@ -69,7 +77,7 @@ def process_bank_bgp(file, input_period):
     df['Date'] = df['Date'].dt.strftime('%Y-%m-%d')
     return df
 
-def process_bank_mb(file):
+def process_bank_mb(file, input_period):
     """Lógica para el segundo banco (MB/Motor Bank)"""
     df = pd.read_excel(file, sheet_name="Sheet1", skiprows=1)
     # Seleccionamos las columnas relevantes (Fecha, Descripción, Débito, Crédito, Referencia)
@@ -122,8 +130,8 @@ def process_bank_mb(file):
         })
 
     resultado = pd.DataFrame(procesado)
-    resultado['Fecha_obj'] = pd.to_datetime(resultado['Fecha'])
-    resultado['PrefijoRef'] = resultado['Fecha_obj'].dt.strftime("MB%Y%m")
+    # PrefijoRef ahora viene del input_period manual
+    resultado['PrefijoRef'] = "MB" + input_period
 
     # Autogenerar Referencia si falta
     resultado['Referencia'] = resultado.apply(
@@ -163,52 +171,51 @@ with col_file:
     uploaded_file = st.file_uploader(f"Subir archivo para {banco_opcion}", type=["xlsx", "xls", "txt"])
 
 with col_pref:
-    # El periodo solo es manual para BGP según el script original, MB lo saca de la fecha.
-    if banco_opcion == "Banco BGP":
-        periodo = st.text_input("Periodo (AAAAMM)", value=datetime.datetime.now().strftime("%Y%m"))
-    else:
-        st.write("**Referencia Automática**")
-        st.caption("MBYYYYMM-00X")
-        periodo = "AUTO"
+    # Ahora el periodo es manual y obligatorio para ambos bancos
+    st.write("**Referencia Manual**")
+    periodo = st.text_input("Periodo (AAAAMM)", value="", placeholder="Ej: 202602", help="Escribe el periodo que quieres que aparezca en la referencia (6 dígitos).")
 
 if uploaded_file:
     if st.button("🚀 Procesar Movimientos"):
-        with st.spinner("Procesando lógica bancaria..."):
-            try:
-                if banco_opcion == "Banco BGP":
-                    df_final = process_bank_bgp(uploaded_file, periodo)
-                else:
-                    df_final = process_bank_mb(uploaded_file)
-                
-                if df_final is not None:
-                    st.success(f"¡Procesamiento de {banco_opcion} completado!")
+        if not periodo or len(periodo) != 6:
+            st.warning("⚠️ Por favor, ingresa un periodo válido de 6 dígitos (AAAAMM) antes de procesar.")
+        else:
+            with st.spinner("Procesando lógica bancaria..."):
+                try:
+                    if banco_opcion == "Banco BGP":
+                        df_final = process_bank_bgp(uploaded_file, periodo)
+                    else:
+                        df_final = process_bank_mb(uploaded_file, periodo)
                     
-                    # --- Métricas ---
-                    m_col1, m_col2, m_col3 = st.columns(3)
-                    total_debitos = df_final['Whitdrawals'].sum()
-                    total_creditos = df_final['Deposits'].sum()
-                    
-                    m_col1.metric("Movimientos", len(df_final))
-                    m_col2.metric("Total Débitos", f"${total_debitos:,.2f}")
-                    m_col3.metric("Total Créditos", f"${total_creditos:,.2f}")
-                    
-                    # Vista Previa
-                    st.subheader("👀 Vista Previa")
-                    st.dataframe(df_final.head(10), use_container_width=True)
-                    
-                    # Descarga
-                    output = BytesIO()
-                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                        df_final.to_excel(writer, index=False)
-                    
-                    st.download_button(
-                        label=f"📥 Descargar Excel para Zoho ({banco_opcion})",
-                        data=output.getvalue(),
-                        file_name=f"Zoho_{banco_opcion.replace(' ', '_')}_{datetime.datetime.now().strftime('%Y%m%d')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-            except Exception as e:
-                st.error(f"Error crítico en el procesamiento: {e}")
-                st.info("Asegúrate de que el formato del archivo subido corresponda al banco seleccionado.")
+                    if df_final is not None:
+                        st.success(f"¡Procesamiento de {banco_opcion} completado!")
+                        
+                        # --- Métricas ---
+                        m_col1, m_col2, m_col3 = st.columns(3)
+                        total_debitos = df_final['Whitdrawals'].sum()
+                        total_creditos = df_final['Deposits'].sum()
+                        
+                        m_col1.metric("Movimientos", len(df_final))
+                        m_col2.metric("Total Débitos", f"${total_debitos:,.2f}")
+                        m_col3.metric("Total Créditos", f"${total_creditos:,.2f}")
+                        
+                        # Vista Previa
+                        st.subheader("👀 Vista Previa")
+                        st.dataframe(df_final.head(10), use_container_width=True)
+                        
+                        # Descarga
+                        output = BytesIO()
+                        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                            df_final.to_excel(writer, index=False)
+                        
+                        st.download_button(
+                            label=f"📥 Descargar Excel para Zoho ({banco_opcion})",
+                            data=output.getvalue(),
+                            file_name=f"Zoho_{banco_opcion.replace(' ', '_')}_{datetime.datetime.now().strftime('%Y%m%d')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+                except Exception as e:
+                    st.error(f"Error crítico en el procesamiento: {e}")
+                    st.info("Asegúrate de que el formato del archivo subido corresponda al banco seleccionado.")
 else:
     st.info("Seleccione un archivo de Excel para comenzar.")
