@@ -50,41 +50,75 @@ meses_es = {
 # --- Lógicas de Procesamiento ---
 
 def process_bank_bgp(file, input_period):
-    """Lógica para el primer banco (BGP)"""
-    # Si es .txt, intentamos leer como CSV o delimitado por tabs
+    """Lógica adaptativa para BGP (Excel o TXT)"""
     if file.name.lower().endswith('.txt'):
-        # Usamos engine='python' y sep=None para que detecte el separador (coma, punto y coma o tab)
-        df = pd.read_csv(file, skiprows=6, usecols=[0, 1, 2, 3, 4, 5, 6], sep=None, engine='python', header=None)
-        # Asignar nombres temporales para que la lógica de abajo funcione
-        df.columns = ['Fecha', 'Referencia', 'Descripción', 'Débito', 'Crédito', 'Transacción', 'Saldo total']
+        # Leer el TXT buscando el separador automáticamente
+        raw_df = pd.read_csv(file, sep=None, engine='python', header=None).dropna(how='all').reset_index(drop=True)
+        
+        # Intentar encontrar la primera fila que parece tener una fecha (DD/MM o YYYY)
+        start_row = 0
+        for i, row in raw_df.iterrows():
+            if any(str(val).count('/') >= 1 or str(val).count('-') >= 2 for val in row.values[:2]):
+                start_row = i
+                break
+        
+        df = raw_df.iloc[start_row:].copy().reset_index(drop=True)
+        # BGP Generalmente tiene: Fecha (0), Referencia (1), Descripción (2), Débito (3), Crédito (4)...
+        # Pero si vemos números en la 2, intentaremos ajustar
+        df.columns = [f'Col_{i}' for i in range(len(df.columns))]
+        
+        # Mapeo tentativo basado en el formato estándar de exportación .txt de Banco General
+        # 0: Fecha, 1: Referencia, 2: Descripción, 3: Débito, 4: Crédito
+        mapping = {
+            'Fecha': df.columns[0],
+            'Referencia': df.columns[1] if len(df.columns) > 1 else None,
+            'Descripción': df.columns[2] if len(df.columns) > 2 else None,
+            'Débito': df.columns[3] if len(df.columns) > 3 else None,
+            'Crédito': df.columns[4] if len(df.columns) > 4 else None
+        }
+        
+        # Si la columna 2 tiene números cortos (como 50, 48), rota la descripción
+        if mapping['Descripción'] and df[mapping['Descripción']].astype(str).str.len().max() < 5:
+            # Probablemente sea: Fecha, Referencia, CódigoTransacción, Descripción, Débito, Crédito
+            if len(df.columns) > 5:
+                mapping['Descripción'] = df.columns[3]
+                mapping['Débito'] = df.columns[4]
+                mapping['Crédito'] = df.columns[5]
+
+        df = df.rename(columns={v: k for k, v in mapping.items() if v})
     else:
         df = pd.read_excel(file, sheet_name="BGPCheckingMovementsExcel", skiprows=6, usecols="A:G")
     
-    # Asegurar que el periodo sea string
-    period_str = str(input_period)
-    sequence = (df.index + 1).astype(str).str.zfill(3)
-    df['Referencia_alt'] = 'BG' + period_str + '-' + sequence
-    
+    # Estandarizar nombres para el procesamiento posterior
     nuevos_nombres = {'Fecha': 'Date', 'Descripción': 'Description', 'Débito': 'Whitdrawals', 'Crédito': 'Deposits'}
     df = df.rename(columns=nuevos_nombres)
+    
+    # Asegurar columnas críticas
+    for col in ['Date', 'Description', 'Whitdrawals', 'Deposits']:
+        if col not in df.columns: df[col] = 0 if 'Whit' in col or 'Depo' in col else ""
 
-    # Limpiar montos (importante para .txt y archivos con miles)
+    # Limpiar montos
     for col in ['Whitdrawals', 'Deposits']:
-        if col in df.columns:
-            # Convertir a string, quitar comas y otros caracteres no numéricos, luego a float
-            df[col] = df[col].astype(str).str.replace(',', '').str.replace('$', '').str.strip()
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        df[col] = df[col].astype(str).str.replace(',', '').str.replace('$', '').str.strip()
+        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
     
-    columnas_a_eliminar = ['Transacción', 'Saldo total']
-    df = df.drop(columns=[c for c in columnas_a_eliminar if c in df.columns])
+    # Generar Referencia
+    period_str = str(input_period)
+    sequence = (df.index + 1).astype(str).str.zfill(3)
+    df['Referencia_final'] = 'BG' + period_str + '-' + sequence
     
-    if 'Referencia' not in df.columns: df['Referencia'] = ""
-    df['Referencia'] = df.apply(lambda row: str(row['Referencia_alt']) if len(str(row['Referencia'])) < 5 else str(row['Referencia']), axis=1)
-    df = df.drop(columns=['Referencia_alt'])
+    # Si ya traía referencia del banco, la preservamos si es larga
+    if 'Referencia' in df.columns:
+        df['Referencia'] = df.apply(lambda row: str(row['Referencia_final']) if len(str(row['Referencia'])) < 5 else str(row['Referencia']), axis=1)
+    else:
+        df['Referencia'] = df['Referencia_final']
     
+    # Limpieza final
+    df = df[['Date', 'Referencia', 'Description', 'Whitdrawals', 'Deposits']]
     df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
     df['Date'] = df['Date'].dt.strftime('%Y-%m-%d')
-    return df
+    
+    return df.dropna(subset=['Date'])
 
 def process_bank_mb(file, input_period):
     """Lógica para el segundo banco (MB/Motor Bank)"""
