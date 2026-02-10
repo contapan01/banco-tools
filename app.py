@@ -159,7 +159,8 @@ with st.sidebar:
 col_file, col_pref = st.columns([2, 1])
 
 with col_file:
-    uploaded_file = st.file_uploader(f"Subir Excel para {banco_opcion}", type=["xlsx", "xls"])
+    # Permitimos .txt también ya que BGP a veces usa esa extensión aunque sea legible por excel
+    uploaded_file = st.file_uploader(f"Subir archivo para {banco_opcion}", type=["xlsx", "xls", "txt"])
 
 with col_pref:
     # El periodo solo es manual para BGP según el script original, MB lo saca de la fecha.
