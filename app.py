@@ -60,20 +60,29 @@ def process_bank_bgp(file, input_period):
     else:
         df = pd.read_excel(file, sheet_name="BGPCheckingMovementsExcel", skiprows=6, usecols="A:G")
     
+    # Asegurar que el periodo sea string
+    period_str = str(input_period)
     sequence = (df.index + 1).astype(str).str.zfill(3)
-    df['Referencia_alt'] = 'BG' + input_period + '-' + sequence
+    df['Referencia_alt'] = 'BG' + period_str + '-' + sequence
     
     nuevos_nombres = {'Fecha': 'Date', 'Descripción': 'Description', 'Débito': 'Whitdrawals', 'Crédito': 'Deposits'}
     df = df.rename(columns=nuevos_nombres)
+
+    # Limpiar montos (importante para .txt y archivos con miles)
+    for col in ['Whitdrawals', 'Deposits']:
+        if col in df.columns:
+            # Convertir a string, quitar comas y otros caracteres no numéricos, luego a float
+            df[col] = df[col].astype(str).str.replace(',', '').str.replace('$', '').str.strip()
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
     
     columnas_a_eliminar = ['Transacción', 'Saldo total']
     df = df.drop(columns=[c for c in columnas_a_eliminar if c in df.columns])
     
     if 'Referencia' not in df.columns: df['Referencia'] = ""
-    df['Referencia'] = df.apply(lambda row: row['Referencia_alt'] if len(str(row['Referencia'])) < 5 else row['Referencia'], axis=1)
+    df['Referencia'] = df.apply(lambda row: str(row['Referencia_alt']) if len(str(row['Referencia'])) < 5 else str(row['Referencia']), axis=1)
     df = df.drop(columns=['Referencia_alt'])
     
-    df['Date'] = pd.to_datetime(df['Date'], dayfirst=True)
+    df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
     df['Date'] = df['Date'].dt.strftime('%Y-%m-%d')
     return df
 
