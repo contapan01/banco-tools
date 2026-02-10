@@ -50,75 +50,62 @@ meses_es = {
 # --- Lógicas de Procesamiento ---
 
 def process_bank_bgp(file, input_period):
-    """Lógica adaptativa para BGP (Excel o TXT)"""
+    """Lógica adaptativa y refinada para BGP (Excel o TXT)"""
     if file.name.lower().endswith('.txt'):
-        # Leer el TXT buscando el separador automáticamente
-        raw_df = pd.read_csv(file, sep=None, engine='python', header=None).dropna(how='all').reset_index(drop=True)
+        # Leer el TXT usando punto y coma como separador (formato exacto del banco)
+        df = pd.read_csv(file, sep=";", engine='python', dtype=str).dropna(how='all').reset_index(drop=True)
         
-        # Intentar encontrar la primera fila que parece tener una fecha (DD/MM o YYYY)
-        start_row = 0
-        for i, row in raw_df.iterrows():
-            if any(str(val).count('/') >= 1 or str(val).count('-') >= 2 for val in row.values[:2]):
-                start_row = i
-                break
-        
-        df = raw_df.iloc[start_row:].copy().reset_index(drop=True)
-        # BGP Generalmente tiene: Fecha (0), Referencia (1), Descripción (2), Débito (3), Crédito (4)...
-        # Pero si vemos números en la 2, intentaremos ajustar
-        df.columns = [f'Col_{i}' for i in range(len(df.columns))]
-        
-        # Mapeo tentativo basado en el formato estándar de exportación .txt de Banco General
-        # 0: Fecha, 1: Referencia, 2: Descripción, 3: Débito, 4: Crédito
-        mapping = {
-            'Fecha': df.columns[0],
-            'Referencia': df.columns[1] if len(df.columns) > 1 else None,
-            'Descripción': df.columns[2] if len(df.columns) > 2 else None,
-            'Débito': df.columns[3] if len(df.columns) > 3 else None,
-            'Crédito': df.columns[4] if len(df.columns) > 4 else None
+        # Mapeo de columnas flexible para manejar acentos
+        col_map = {
+            'Debito': 'Whitdrawals', 'Débito': 'Whitdrawals',
+            'Credito': 'Deposits', 'Crédito': 'Deposits',
+            'Fecha': 'Date',
+            'Descripción': 'Description'
         }
         
-        # Si la columna 2 tiene números cortos (como 50, 48), rota la descripción
-        if mapping['Descripción'] and df[mapping['Descripción']].astype(str).str.len().max() < 5:
-            # Probablemente sea: Fecha, Referencia, CódigoTransacción, Descripción, Débito, Crédito
-            if len(df.columns) > 5:
-                mapping['Descripción'] = df.columns[3]
-                mapping['Débito'] = df.columns[4]
-                mapping['Crédito'] = df.columns[5]
-
-        df = df.rename(columns={v: k for k, v in mapping.items() if v})
+        # Normalizar nombres de columnas existentes
+        df.columns = [col_map.get(c, c) for c in df.columns]
     else:
-        df = pd.read_excel(file, sheet_name="BGPCheckingMovementsExcel", skiprows=6, usecols="A:G")
-    
-    # Estandarizar nombres para el procesamiento posterior
-    nuevos_nombres = {'Fecha': 'Date', 'Descripción': 'Description', 'Débito': 'Whitdrawals', 'Crédito': 'Deposits'}
-    df = df.rename(columns=nuevos_nombres)
-    
-    # Asegurar columnas críticas
-    for col in ['Date', 'Description', 'Whitdrawals', 'Deposits']:
-        if col not in df.columns: df[col] = 0 if 'Whit' in col or 'Depo' in col else ""
+        df = pd.read_excel(file, sheet_name="BGPCheckingMovementsExcel", skiprows=6)
+        nuevos_nombres = {'Fecha': 'Date', 'Descripción': 'Description', 'Débito': 'Whitdrawals', 'Crédito': 'Deposits'}
+        df = df.rename(columns=nuevos_nombres)
 
-    # Limpiar montos
-    for col in ['Whitdrawals', 'Deposits']:
-        df[col] = df[col].astype(str).str.replace(',', '').str.replace('$', '').str.strip()
-        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+    # --- Limpieza y Transformación ---
     
-    # Generar Referencia
+    # 1. Limpieza de Descripciones (reemplazar ? por espacio)
+    if 'Description' in df.columns:
+        df['Description'] = df['Description'].astype(str).str.replace('?', ' ', regex=False).str.strip()
+
+    # 2. Limpieza de Montos (quitar $ y ,)
+    for col in ['Whitdrawals', 'Deposits']:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.replace(',', '', regex=False).str.replace('$', '', regex=False).str.strip()
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+    
+    # 3. Lógica de Referencias Inteligentes
+    # Prioridad: Referencia 1 -> Generación Secuencial
     period_str = str(input_period)
     sequence = (df.index + 1).astype(str).str.zfill(3)
-    df['Referencia_final'] = 'BG' + period_str + '-' + sequence
+    df['BG_Fallback'] = 'BG' + period_str + '-' + sequence
     
-    # Si ya traía referencia del banco, la preservamos si es larga
-    if 'Referencia' in df.columns:
-        df['Referencia'] = df.apply(lambda row: str(row['Referencia_final']) if len(str(row['Referencia'])) < 5 else str(row['Referencia']), axis=1)
+    if 'Referencia 1' in df.columns:
+        # Si Referencia 1 tiene datos reales (más de 2 caracteres), los usamos. Si no, usamos el fallback.
+        df['Reference Number'] = df.apply(
+            lambda row: str(row['Referencia 1']) if pd.notna(row['Referencia 1']) and len(str(row['Referencia 1']).strip()) > 2 
+            else row['BG_Fallback'], axis=1
+        )
     else:
-        df['Referencia'] = df['Referencia_final']
+        df['Reference Number'] = df['BG_Fallback']
+
+    # 4. Formateo de Fecha
+    if 'Date' in df.columns:
+        df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
+        df['Date'] = df['Date'].dt.strftime('%Y-%m-%d')
+
+    # Columnas finales para Zoho
+    df_final = df[['Date', 'Description', 'Whitdrawals', 'Deposits', 'Reference Number']].copy()
     
-    # Limpieza final
-    df = df[['Date', 'Referencia', 'Description', 'Whitdrawals', 'Deposits']]
-    df['Date'] = pd.to_datetime(df['Date'], dayfirst=True, errors='coerce')
-    df['Date'] = df['Date'].dt.strftime('%Y-%m-%d')
-    
-    return df.dropna(subset=['Date'])
+    return df_final.dropna(subset=['Date'])
 
 def process_bank_mb(file, input_period):
     """Lógica para el segundo banco (MB/Motor Bank)"""
@@ -187,7 +174,7 @@ def process_bank_mb(file, input_period):
     resultado['Whitdrawals'] = resultado['Monto'].apply(lambda x: abs(x) if x < 0 else 0)
     resultado['Deposits'] = resultado['Monto'].apply(lambda x: x if x > 0 else 0)
     resultado = resultado[['Fecha', 'Descripción', 'Whitdrawals', 'Deposits', 'Referencia']]
-    resultado = resultado.rename(columns={'Fecha': 'Date'})
+    resultado = resultado.rename(columns={'Fecha': 'Date', 'Referencia': 'Reference Number'})
     return resultado
 
 # --- Interfaz de Usuario ---
@@ -204,7 +191,7 @@ with st.sidebar:
     )
     st.write("---")
     st.info(f"Modo actual: {banco_opcion}")
-    st.caption("v1.1.0 | Hetzner Cloud")
+    st.caption("v1.2.0 | Hetzner Cloud")
 
 # Layout de inputs
 col_file, col_pref = st.columns([2, 1])
@@ -233,14 +220,23 @@ if uploaded_file:
                     if df_final is not None:
                         st.success(f"¡Procesamiento de {banco_opcion} completado!")
                         
-                        # --- Métricas ---
-                        m_col1, m_col2, m_col3 = st.columns(3)
+                        # --- Resumen de Totales ---
+                        st.write("---")
+                        st.subheader("📊 Resumen del Procesamiento")
+                        
                         total_debitos = df_final['Whitdrawals'].sum()
                         total_creditos = df_final['Deposits'].sum()
                         
-                        m_col1.metric("Movimientos", len(df_final))
-                        m_col2.metric("Total Débitos", f"${total_debitos:,.2f}")
-                        m_col3.metric("Total Créditos", f"${total_creditos:,.2f}")
+                        m_col1, m_col2, m_col3 = st.columns(3)
+                        
+                        with m_col1:
+                            st.metric("Movimientos", f"{len(df_final):,}")
+                        with m_col2:
+                            st.metric("Total Débitos (Salidas)", f"${total_debitos:,.2f}", delta_color="inverse")
+                        with m_col3:
+                            st.metric("Total Créditos (Entradas)", f"${total_creditos:,.2f}")
+                        
+                        st.write("---")
                         
                         # Vista Previa
                         st.subheader("👀 Vista Previa")

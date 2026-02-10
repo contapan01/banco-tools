@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+.env
+
+# Streamlit
+.streamlit/
+
+# Excel temporary files
+~$*.xlsx
+*.xlsx
+!zoho_template.xlsx  # Si tuviéramos una plantilla que sí debe ir, pero por ahora ignoramos todos los datos personales
+
+# OS
+.DS_Store
+Thumbs.db
