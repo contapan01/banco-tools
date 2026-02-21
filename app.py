@@ -186,12 +186,12 @@ with st.sidebar:
     st.header("Configuración")
     banco_opcion = st.selectbox(
         "Seleccione el Banco",
-        ["Banco BGP", "Motor Bank (MB)"],
+        ["BGEN", "Motor Bank (MB)"],
         help="Elige el banco correspondiente para aplicar la lógica correcta."
     )
     st.write("---")
     st.info(f"Modo actual: {banco_opcion}")
-    st.caption("v1.2.0 | Hetzner Cloud")
+    st.caption("v1.2.1 | Hetzner Cloud")
 
 # Layout de inputs
 col_file, col_pref = st.columns([2, 1])
@@ -212,7 +212,7 @@ if uploaded_file:
         else:
             with st.spinner("Procesando lógica bancaria..."):
                 try:
-                    if banco_opcion == "Banco BGP":
+                    if banco_opcion == "BGEN":
                         df_final = process_bank_bgp(uploaded_file, periodo)
                     else:
                         df_final = process_bank_mb(uploaded_file, periodo)
