@@ -161,20 +161,19 @@ def process_bank_mb(file, input_period):
 
     resultado = pd.DataFrame(procesado)
     # PrefijoRef ahora viene del input_period manual
-    resultado['PrefijoRef'] = "MB" + input_period
+    resultado['PrefijoRef'] = "MP" + input_period
 
-    # Autogenerar Referencia si falta
-    resultado['Referencia'] = resultado.apply(
-        lambda row: f"{row['PrefijoRef']}-{str(row.name + 1).zfill(3)}"
-        if pd.isna(row['Referencia']) or str(row['Referencia']).strip() in ['0', '', 'nan']
-        else row['Referencia'], axis=1
+    # Autogenerar Referencia si falta o es '0'
+    resultado['Reference Number'] = resultado.apply(
+        lambda row: row['Referencia'] if pd.notna(row['Referencia']) and str(row['Referencia']).strip() not in ['0', '', 'nan']
+        else f"{row['PrefijoRef']}-{str(row.name + 1).zfill(3)}",
+        axis=1
     )
 
     # Finalizar formato
     resultado['Whitdrawals'] = resultado['Monto'].apply(lambda x: abs(x) if x < 0 else 0)
     resultado['Deposits'] = resultado['Monto'].apply(lambda x: x if x > 0 else 0)
-    resultado = resultado[['Fecha', 'Descripción', 'Whitdrawals', 'Deposits', 'Referencia']]
-    resultado = resultado.rename(columns={'Fecha': 'Date', 'Referencia': 'Reference Number'})
+    resultado = resultado[['Date', 'Descripción', 'Whitdrawals', 'Deposits', 'Reference Number']]
     return resultado
 
 # --- Interfaz de Usuario ---
@@ -186,12 +185,12 @@ with st.sidebar:
     st.header("Configuración")
     banco_opcion = st.selectbox(
         "Seleccione el Banco",
-        ["BGEN", "Motor Bank (MB)"],
+        ["BGEN", "MPAN"],
         help="Elige el banco correspondiente para aplicar la lógica correcta."
     )
     st.write("---")
     st.info(f"Modo actual: {banco_opcion}")
-    st.caption("v1.2.1 | Hetzner Cloud")
+    st.caption("v1.2.2 | Hetzner Cloud")
 
 # Layout de inputs
 col_file, col_pref = st.columns([2, 1])
